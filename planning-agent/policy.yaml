@@ -1,0 +1,180 @@
+version: 2
+profile_name: "single-user-programmer-masters"
+
+clock:
+  timezone: Europe/Moscow
+  # All planner policy times, cron schedules and human-facing planning times use
+  # Europe/Moscow unless an external Google Calendar event explicitly carries another
+  # timezone. Never convert recurring policy anchors to a fixed UTC offset.
+
+sources_of_truth:
+  tasks: clickup
+  fixed_time: google_calendar
+  agent_timeblocks: planning_calendar
+  planner_annotations: planner_sqlite
+  learned_model: planner_sqlite
+
+clickup:
+  # Official ClickUp MCP Free Forever currently has a 100-call rolling-24h limit.
+  # This is an operating budget, not an API-enforced setting in planning-core.
+  mcp_daily_limit_reference: 100
+  target_normal_day_calls_max: 40
+  reserve_for_user_driven_changes: 40
+  use_custom_fields_for_planner_metadata: false
+  mutations_require_explicit_confirmation: true
+  confirmation_scope: exact_proposed_diff_only
+  # Native task fields remain user-controlled. Planner semantics live locally.
+  planner_annotations_location: planner_sqlite
+  deadlines:
+    hard:
+      semantics: external_commitment
+      preferred_source: clickup_due_date
+      write_requires_confirmation: true
+      typical_area: masters
+    soft:
+      semantics: desired_target
+      source: planner_sqlite
+      write_requires_confirmation: false
+      publish_to_clickup: false
+
+calendar:
+  planning_calendar_name: "Planning Agent"
+  read_calendar_ids:
+    - primary
+  never_modify_non_planning_calendars: true
+  user_manual_move_of_planning_block: treat_as_override
+  horizon_days: 60
+  fixed_recurring_commitments_expected_in_user_calendar:
+    - "Thursday 11:00 trainer session"
+    - "Saturday evening football"
+
+work:
+  flexible_hours: true
+  meeting_fragmentation_window:
+    timezone: Europe/Moscow
+    earliest_first_call: "13:00"
+    latest_last_call: "20:00"
+    semantics: "soft fragmentation prior; actual Calendar events are authoritative"
+  prefer_high_cognitive_work_before_first_call: true
+  allow_deep_work_between_calls_if_gap_min: 90
+  afternoon_meeting_context_switch_penalty: 0.12
+
+sleep:
+  observed_bedtime_window_moscow: ["00:00", "02:00"]
+  observed_wake_window_moscow: ["07:00", "10:00"]
+  target_hours: 8.0
+  minimum_protected_hours: 7.5
+  # If the user did not state tomorrow's wake time, deadline feasibility must not depend
+  # on capacity before the latest typical wake time.
+  conservative_unconfirmed_wake: "10:00"
+  early_capacity_before_conservative_wake: contingent_only
+  no_high_cognitive_work_within_min_of_planned_sleep: 90
+
+day:
+  planning_window:
+    start: "07:00"
+    end: "00:30"
+  buffers:
+    default_fraction: 0.20
+    high_uncertainty_fraction: 0.30
+    minimum_transition_min: 10
+  deep_work:
+    max_blocks_per_day: 3
+    max_total_min_normal: 240
+    max_total_min_low_energy: 150
+    block_min: 50
+    block_max: 110
+  context_switches:
+    max_high_cognitive_domains_per_day: 3
+    max_major_switches: 5
+
+sport:
+  fixed_commitments_are_calendar_owned: true
+  thursday_trainer:
+    local_time_hint: "11:00"
+    treat_as_fixed_only_if_present_in_calendar: true
+  saturday_football:
+    time_hint: evening
+    treat_as_fixed_only_if_present_in_calendar: true
+  flexible_self_training:
+    source: clickup_or_user_instruction
+    auto_schedule_existing_tasks: true
+    auto_create_new_training_tasks: false
+    avoid_high_leg_load_before_football_hours: 24
+    rule_strength: soft
+
+life_areas:
+  work:
+    weight: 1.0
+  sport:
+    weight: 0.8
+  masters:
+    weight: 1.15
+  projects_learning:
+    weight: 0.85
+  social:
+    weight: 0.65
+  rest:
+    weight: 1.10
+  # Weekly targets should be learned/configured after 2-3 weeks instead of pretending
+  # current unknown hour quotas are facts.
+  weekly_targets_mode: learn_then_confirm
+
+priority:
+  urgency: 0.20
+  deadline_risk: 0.30
+  impact: 0.18
+  dependency_unblock: 0.08
+  area_debt: 0.10
+  momentum: 0.06
+  commitment: 0.08
+  penalties:
+    context_switch: 0.10
+    energy_mismatch: 0.12
+    uncertainty: 0.06
+
+modes:
+  normal:
+    buffer_fraction: 0.20
+  low_energy:
+    trigger:
+      self_report_energy_lte: 2
+      sleep_hours_lt: 6.5
+    buffer_fraction: 0.30
+    deep_work_max_min: 150
+    forbid_late_deep_work_after: "21:30"
+  academic_crunch:
+    trigger:
+      hard_deadline_hours_lte: 72
+      deadline_risk_gte: 0.80
+    masters_weight_multiplier: 1.9
+    projects_learning_weight_multiplier: 0.30
+    social_weight_multiplier: 0.50
+    preserve_sleep_floor: true
+    preserve_fixed_work_events: true
+    preserve_fixed_sport_commitments: true
+
+notifications:
+  # Morning brief is intentionally late enough not to depend on a 07:00 wake-up.
+  quiet_hours:
+    start: "00:00"
+    end: "10:00"
+  max_unsolicited_per_day: 4
+  critical_can_break_quiet_hours: false
+  critical_deadline_hours: 24
+  send_only_if_actionable: true
+  dedupe_window_min: 120
+
+autonomy:
+  create_move_delete_agent_blocks: autonomous
+  create_soft_target_in_planner_db: autonomous
+  infer_planner_annotations_locally: autonomous
+  any_clickup_mutation: ask
+  complete_clickup_task: ask
+  change_clickup_due_date: ask
+  change_clickup_priority: ask
+  add_remove_clickup_tag: ask
+  create_clickup_task: ask
+  move_or_delete_user_calendar_event: never
+  schedule_social_commitment_with_other_people: ask
+  create_external_invitation: never

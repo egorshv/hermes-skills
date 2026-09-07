@@ -1,0 +1,23 @@
+# Merge into ~/.hermes/config.yaml.
+# This uses a local stdio MCP server, so no additional network listener is needed.
+mcp_servers:
+  planning_core:
+    command: "/opt/planning-agent/.venv/bin/python"
+    args:
+      - "/opt/planning-agent/planner_mcp/server.py"
+    env:
+      PLANNER_HOME: "/home/YOUR_USER/.local/share/planning-agent"
+      PLANNER_DB: "/home/YOUR_USER/.local/share/planning-agent/planner.db"
+      PLANNER_POLICY: "/home/YOUR_USER/.config/planning-agent/policy.yaml"
+      GOOGLE_OAUTH_CLIENT: "/home/YOUR_USER/.config/planning-agent/google_oauth_client.json"
+      GOOGLE_TOKEN: "/home/YOUR_USER/.config/planning-agent/google_token.json"
+      PLANNING_CALENDAR_ID_FILE: "/home/YOUR_USER/.config/planning-agent/planning_calendar_id"
+      PLANNING_CALENDAR_NAME: "Planning Agent"
+      PLANNER_TIMEZONE: "Europe/Moscow"
+      READ_CALENDAR_IDS: "primary"
+    timeout: 30
+    connect_timeout: 10
+    enabled: true
+    supports_parallel_tool_calls: false
+
+# Keep your already-working ClickUp MCP entry unchanged.

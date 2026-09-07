@@ -1,0 +1,8 @@
+[Unit]
+Description=Planning Agent deterministic health check
+
+[Service]
+Type=oneshot
+EnvironmentFile=%h/.config/planning-agent/env
+WorkingDirectory=/opt/planning-agent
+ExecStart=/opt/planning-agent/.venv/bin/python /opt/planning-agent/scripts/health_check.py

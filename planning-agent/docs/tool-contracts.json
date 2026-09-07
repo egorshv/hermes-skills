@@ -1,0 +1,59 @@
+{
+  "planning_core": {
+    "calendar_list_calendars": {
+      "side_effect": false,
+      "purpose": "discover calendar IDs"
+    },
+    "calendar_list_events": {
+      "side_effect": false,
+      "inputs": [
+        "time_min",
+        "time_max",
+        "calendar_ids?"
+      ]
+    },
+    "calendar_ensure_planning_calendar": {
+      "side_effect": true,
+      "scope": "create one app-owned secondary calendar"
+    },
+    "calendar_upsert_planning_block": {
+      "side_effect": true,
+      "write_guard": "dedicated planning calendar only",
+      "idempotency_key": "planner_key"
+    },
+    "calendar_delete_planning_block": {
+      "side_effect": true,
+      "write_guard": "planner_owned=1 only"
+    },
+    "planner_record_task_observation": {
+      "side_effect": true,
+      "storage": "append-only observation"
+    },
+    "planner_get_duration_stats": {
+      "side_effect": false
+    },
+    "planner_audit_recent": {
+      "side_effect": false
+    },
+    "planner_health": {
+      "side_effect": false
+    },
+    "planner_upsert_task_annotation": {
+      "side_effect": true,
+      "storage": "planner SQLite only",
+      "clickup_mutation": false
+    },
+    "planner_get_task_annotations": {
+      "side_effect": false
+    },
+    "planner_cache_clickup_tasks": {
+      "side_effect": true,
+      "storage": "local snapshot",
+      "remote_clickup_call": false
+    },
+    "planner_get_cached_clickup_tasks": {
+      "side_effect": false,
+      "remote_clickup_call": false
+    }
+  }
+}
