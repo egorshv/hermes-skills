@@ -31,7 +31,7 @@ This bundle is intentionally split into:
 ```bash
 sudo mkdir -p /opt/planning-agent
 sudo chown "$USER":"$USER" /opt/planning-agent
-cp -a planner_mcp scripts pyproject.toml /opt/planning-agent/
+cp -a planner_mcp scripts pyproject.toml schema.sql /opt/planning-agent/
 cd /opt/planning-agent
 uv sync
 mkdir -p ~/.config/planning-agent ~/.local/share/planning-agent
@@ -41,6 +41,10 @@ cp /path/to/planning-agent-bundle-v2-moscow/policy.yaml \
   ~/.config/planning-agent/policy.yaml
 chmod 600 ~/.config/planning-agent/env
 ```
+
+`planning-core` requests exactly one Google scope, `calendar.app.created`, so the
+credential cannot see or touch any calendar it did not create itself. Reading the user's
+real calendars is the `google-workspace` skill's job.
 
 Create a Google Cloud project, enable Google Calendar API, create an OAuth client of type
 "Desktop app", download the JSON credentials, and save it to:
@@ -83,8 +87,11 @@ invent upstream ClickUp tools.
 sqlite3 ~/.local/share/planning-agent/planner.db < schema.sql
 ```
 
-The MCP server will also create the database file on first use, but applying the schema
-explicitly makes the state inspectable from day one.
+The server also applies `schema.sql` itself on its first database connection (every
+statement is `CREATE ... IF NOT EXISTS`, so replaying it is a no-op). Running it by hand
+just makes the state inspectable from day one. The server looks for `schema.sql` one
+directory above `planner_mcp/`; override with `PLANNER_SCHEMA` if you deploy a different
+layout.
 
 ## Install deterministic maintenance
 
@@ -103,6 +110,14 @@ For a server where user services must survive logout:
 ```bash
 sudo loginctl enable-linger "$USER"
 ```
+
+## Configure the planning skill
+
+The skill depends on the bundled `google-workspace` skill for all reads of the user's real
+calendars, and on the `planning_core` MCP for every planning-block read and write. Set at
+least `planning.calendar_read_ids` (the calendars holding fixed commitments) and
+`planning.planning_calendar_name`, which must match `PLANNING_CALENDAR_NAME` in the MCP
+environment.
 
 ## Install the Hermes planning skill
 
@@ -127,6 +142,7 @@ Telegram conversation, you can create the jobs interactively instead.
 - `policy.yaml` — default scheduling/autonomy policy.
 - `schema.sql` — operational memory, task annotations, ClickUp snapshot + audit schema.
 - `docs/clickup-contract.md` — rate-aware ClickUp semantic contract.
+- `docs/tool-contracts.json` — side effects, write guards and idempotency keys per tool.
 - `docs/profile-overrides.md` — calibrated profile assumptions from the user.
 - `INTEGRATION_PLAN.md` — complete manual integration and acceptance-test runbook.
 - `planner_mcp/server.py` — Google Calendar + planner memory MCP.
