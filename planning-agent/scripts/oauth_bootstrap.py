@@ -5,11 +5,9 @@ from pathlib import Path
 
 from google_auth_oauthlib.flow import InstalledAppFlow
 
-SCOPES = [
-    "https://www.googleapis.com/auth/calendar.events.readonly",
-    "https://www.googleapis.com/auth/calendar.calendarlist.readonly",
-    "https://www.googleapis.com/auth/calendar.app.created",
-]
+# Must stay identical to SCOPES in planner_mcp/server.py. Reads of user calendars go
+# through the google-workspace skill, so planning-core never asks for them.
+SCOPES = ["https://www.googleapis.com/auth/calendar.app.created"]
 
 client_file = Path(os.path.expandvars(os.environ["GOOGLE_OAUTH_CLIENT"])).expanduser()
 token_file = Path(os.path.expandvars(os.environ["GOOGLE_TOKEN"])).expanduser()

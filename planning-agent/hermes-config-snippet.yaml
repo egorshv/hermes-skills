@@ -14,10 +14,11 @@ mcp_servers:
       PLANNING_CALENDAR_ID_FILE: "/home/YOUR_USER/.config/planning-agent/planning_calendar_id"
       PLANNING_CALENDAR_NAME: "Planning Agent"
       PLANNER_TIMEZONE: "Europe/Moscow"
-      READ_CALENDAR_IDS: "primary"
     timeout: 30
     connect_timeout: 10
     enabled: true
     supports_parallel_tool_calls: false
 
 # Keep your already-working ClickUp MCP entry unchanged.
+# planning_core does not read user calendars. Fixed commitments are read through the
+# google-workspace skill, configured via skills.config.planning.calendar_read_ids.

@@ -10,7 +10,9 @@ clock:
 sources_of_truth:
   tasks: clickup
   fixed_time: google_calendar
+  fixed_time_read_via: google_workspace_skill
   agent_timeblocks: planning_calendar
+  agent_timeblocks_access_via: planning_core_mcp
   planner_annotations: planner_sqlite
   learned_model: planner_sqlite
 
@@ -39,9 +41,14 @@ clickup:
 
 calendar:
   planning_calendar_name: "Planning Agent"
-  read_calendar_ids:
-    - primary
+  # Fixed/external commitments are read through the google-workspace skill. The calendar
+  # list lives in skills.config.planning.calendar_read_ids, not here and not in the
+  # planning_core MCP environment.
+  read_via: google_workspace_skill
+  read_calendar_ids_config_key: planning.calendar_read_ids
+  # planning_core holds only calendar.app.created, so this is code-enforced, not a promise.
   never_modify_non_planning_calendars: true
+  never_write_calendar_via_google_workspace: true
   user_manual_move_of_planning_block: treat_as_override
   horizon_days: 60
   fixed_recurring_commitments_expected_in_user_calendar:

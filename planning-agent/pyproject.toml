@@ -3,12 +3,11 @@ name = "planning-agent-core"
 version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
-  "mcp>=2,<3",
+  "mcp>=1.2,<2",
   "google-api-python-client>=2,<3",
   "google-auth>=2,<3",
   "google-auth-oauthlib>=1,<2",
   "google-auth-httplib2>=0.2,<1",
-  "PyYAML>=6,<7",
 ]
 
 [tool.uv]

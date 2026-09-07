@@ -14,15 +14,14 @@ from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
-from mcp.server import MCPServer
+from mcp.server.fastmcp import FastMCP
 
-mcp = MCPServer("planning-core")
+mcp = FastMCP("planning-core")
 
-SCOPES = [
-    "https://www.googleapis.com/auth/calendar.events.readonly",
-    "https://www.googleapis.com/auth/calendar.calendarlist.readonly",
-    "https://www.googleapis.com/auth/calendar.app.created",
-]
+# Reading user/external calendars is the google-workspace skill's job. planning-core
+# holds only app.created, so this credential structurally cannot see or touch any
+# calendar it did not create itself.
+SCOPES = ["https://www.googleapis.com/auth/calendar.app.created"]
 
 def expand_env_path(name: str, default: str) -> Path:
     raw = os.environ.get(name, default)
@@ -36,19 +35,31 @@ CAL_ID_FILE = expand_env_path(
 )
 CAL_NAME = os.environ.get("PLANNING_CALENDAR_NAME", "Planning Agent")
 TZ = os.environ.get("PLANNER_TIMEZONE", "Europe/Moscow")
-READ_CALENDAR_IDS = [
-    x.strip() for x in os.environ.get("READ_CALENDAR_IDS", "primary").split(",")
-    if x.strip()
-]
+SCHEMA_PATH = expand_env_path(
+    "PLANNER_SCHEMA", str(Path(__file__).resolve().parent.parent / "schema.sql")
+)
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
+_schema_applied = False
+
 def db() -> sqlite3.Connection:
+    global _schema_applied
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(DB_PATH)
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA journal_mode=WAL")
+    if not _schema_applied:
+        if not SCHEMA_PATH.exists():
+            raise RuntimeError(
+                f"schema.sql not found at {SCHEMA_PATH}. Deploy it next to planner_mcp/ "
+                "or point PLANNER_SCHEMA at it."
+            )
+        # schema.sql is CREATE ... IF NOT EXISTS throughout, so replaying it is a no-op.
+        con.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
+        con.commit()
+        _schema_applied = True
     return con
 
 def service():
@@ -136,81 +147,52 @@ def _get_event(event_id: str) -> dict[str, Any] | None:
         raise
 
 @mcp.tool()
-def calendar_list_calendars() -> list[dict[str, Any]]:
-    """List calendars visible to the user. Read-only discovery tool."""
+def calendar_ensure_planning_calendar() -> dict[str, str]:
+    """Create the dedicated Planning Agent calendar once and return its id."""
+    return {"calendar_id": planning_calendar_id(), "summary": CAL_NAME}
+
+@mcp.tool()
+def calendar_list_planning_blocks(
+    time_min: str,
+    time_max: str,
+) -> list[dict[str, Any]]:
+    """
+    Read blocks on the dedicated planning calendar only, with their planner_key.
+    User and external calendars are read through the google-workspace skill, not here.
+    Call this before an upsert so a manually moved block is not silently overwritten.
+    """
     s = service()
+    cid = planning_calendar_id()
     out: list[dict[str, Any]] = []
     page = None
     while True:
-        res = s.calendarList().list(pageToken=page).execute()
-        for c in res.get("items", []):
+        res = s.events().list(
+            calendarId=cid,
+            timeMin=time_min,
+            timeMax=time_max,
+            singleEvents=True,
+            orderBy="startTime",
+            pageToken=page,
+        ).execute()
+        for e in res.get("items", []):
+            private = e.get("extendedProperties", {}).get("private", {})
             out.append(
                 {
-                    "id": c.get("id"),
-                    "summary": c.get("summary"),
-                    "primary": c.get("primary", False),
-                    "accessRole": c.get("accessRole"),
-                    "timeZone": c.get("timeZone"),
+                    "event_id": e.get("id"),
+                    "status": e.get("status"),
+                    "summary": e.get("summary", ""),
+                    "start": e.get("start"),
+                    "end": e.get("end"),
+                    "planner_owned": private.get("planner_owned") == "1",
+                    "planner_key": private.get("planner_key"),
+                    "planner_revision": private.get("planner_revision"),
+                    "clickup_task_id": private.get("clickup_task_id"),
+                    "plan_id": private.get("plan_id"),
                 }
             )
         page = res.get("nextPageToken")
         if not page:
             return out
-
-@mcp.tool()
-def calendar_list_events(
-    time_min: str,
-    time_max: str,
-    calendar_ids: list[str] | None = None,
-) -> list[dict[str, Any]]:
-    """Read events in an ISO-8601 time range. Never mutates external calendars."""
-    s = service()
-    ids = calendar_ids or READ_CALENDAR_IDS
-    out: list[dict[str, Any]] = []
-    for cid in ids:
-        page = None
-        while True:
-            res = s.events().list(
-                calendarId=cid,
-                timeMin=time_min,
-                timeMax=time_max,
-                singleEvents=True,
-                orderBy="startTime",
-                pageToken=page,
-            ).execute()
-            for e in res.get("items", []):
-                out.append(
-                    {
-                        "calendar_id": cid,
-                        "id": e.get("id"),
-                        "etag": e.get("etag"),
-                        "status": e.get("status"),
-                        "summary": e.get("summary", ""),
-                        "start": e.get("start"),
-                        "end": e.get("end"),
-                        "location": e.get("location"),
-                        "transparency": e.get("transparency", "opaque"),
-                        "planner_owned": (
-                            e.get("extendedProperties", {})
-                             .get("private", {})
-                             .get("planner_owned") == "1"
-                        ),
-                        "clickup_task_id": (
-                            e.get("extendedProperties", {})
-                             .get("private", {})
-                             .get("clickup_task_id")
-                        ),
-                    }
-                )
-            page = res.get("nextPageToken")
-            if not page:
-                break
-    return out
-
-@mcp.tool()
-def calendar_ensure_planning_calendar() -> dict[str, str]:
-    """Create the dedicated Planning Agent calendar once and return its id."""
-    return {"calendar_id": planning_calendar_id(), "summary": CAL_NAME}
 
 @mcp.tool()
 def calendar_upsert_planning_block(
@@ -465,11 +447,13 @@ def planner_get_task_annotations(task_ids: list[str]) -> list[dict[str, Any]]:
 def planner_cache_clickup_tasks(tasks: list[dict[str, Any]]) -> dict[str, Any]:
     """Cache a batched ClickUp read locally. Does not call or mutate ClickUp."""
     fetched = now_iso()
+    cached = 0
     with db() as con:
         for task in tasks[:5000]:
             task_id = str(task.get("id") or "").strip()
             if not task_id:
                 continue
+            cached += 1
             con.execute(
                 """
                 INSERT INTO clickup_task_snapshot(task_id, payload_json, fetched_at)
@@ -480,7 +464,7 @@ def planner_cache_clickup_tasks(tasks: list[dict[str, Any]]) -> dict[str, Any]:
                 """,
                 (task_id, json.dumps(task, ensure_ascii=False), fetched),
             )
-    return {"cached": len(tasks), "fetched_at": fetched}
+    return {"cached": cached, "received": len(tasks), "fetched_at": fetched}
 
 @mcp.tool()
 def planner_get_cached_clickup_tasks(task_ids: list[str] | None = None) -> dict[str, Any]:
@@ -535,7 +519,12 @@ def planner_health() -> dict[str, Any]:
         status["db_error"] = str(e)
 
     try:
-        cid = planning_calendar_id()
+        if not CAL_ID_FILE.exists():
+            raise RuntimeError(
+                "planning calendar not created yet; "
+                "call calendar_ensure_planning_calendar once"
+            )
+        cid = CAL_ID_FILE.read_text(encoding="utf-8").strip()
         service().calendars().get(calendarId=cid).execute()
         status["planning_calendar"] = True
         status["planning_calendar_id"] = cid

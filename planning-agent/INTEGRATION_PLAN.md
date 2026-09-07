@@ -15,14 +15,16 @@ timezone = Europe/Moscow
    |
    +-- planning-agent Skill
    |
+   +-- google-workspace Skill ---------------> user calendars: READ ONLY
+   |
    +-- existing ClickUp MCP -----------------> ClickUp
    |
    +-- planning_core MCP
           |
-          +-- Google Calendar API
+          +-- Google Calendar API (scope: calendar.app.created only)
           |      |
-          |      +-- user calendars: READ ONLY
           |      +-- Planning Agent calendar: READ/WRITE
+          |      +-- any other calendar: UNREACHABLE by credential
           |
           +-- SQLite planner.db
                  +-- task annotations
@@ -48,7 +50,9 @@ Autonomy boundary:
 planner.db                 autonomous
 Planning Agent calendar    autonomous
 existing ClickUp           ask for exact mutation
-user/external calendars    read-only
+user/external calendars    read-only, via google-workspace
+Calendar writes through
+  google-workspace         never, on any calendar
 external invitations       never
 ```
 
@@ -58,6 +62,8 @@ Assumptions:
 
 - Hermes Agent is already installed and Telegram gateway works.
 - Existing ClickUp MCP already works in Hermes.
+- The bundled `google-workspace` skill is installed and its Google Calendar read
+  operations work. planning_core does not read user calendars.
 - Linux server, root access.
 - Python 3.11+.
 - `uv` installed.
@@ -106,6 +112,7 @@ sudo chown "$USER":"$USER" /opt/planning-agent
 cp -a planner_mcp /opt/planning-agent/
 cp -a scripts /opt/planning-agent/
 cp pyproject.toml /opt/planning-agent/
+cp schema.sql /opt/planning-agent/
 
 cd /opt/planning-agent
 uv sync
@@ -118,10 +125,14 @@ python3 --version
 uv --version
 
 /opt/planning-agent/.venv/bin/python -c \
-'from mcp.server import MCPServer; print("MCP import OK")'
+'from mcp.server.fastmcp import FastMCP; print("MCP import OK")'
 ```
 
 Expected: Python >= 3.11 and `MCP import OK`.
+
+`schema.sql` must sit one directory above `planner_mcp/` (or be pointed at by
+`PLANNER_SCHEMA`); the server applies it on its first database connection and raises a
+clear error if it is missing.
 
 ## 4. Create planner config and state directories
 
@@ -180,17 +191,19 @@ Protect it:
 chmod 600 ~/.config/planning-agent/google_oauth_client.json
 ```
 
-The bundle requests only:
+The bundle requests exactly one scope:
 
 ```text
-calendar.events.readonly
-calendar.calendarlist.readonly
 calendar.app.created
 ```
 
 The intended model is:
-- read user calendars;
-- create and mutate only the app-created `Planning Agent` secondary calendar.
+- read the user's real calendars through the `google-workspace` skill, with its own
+  credential;
+- give planning_core a credential that can only create and mutate the app-created
+  `Planning Agent` secondary calendar, and cannot even see anything else.
+
+If you previously authorized the wider read scopes, re-run the bootstrap to drop them.
 
 ## 6. Perform one-time Google OAuth authorization
 
@@ -255,6 +268,9 @@ task_annotation
 task_observation
 ```
 
+The server applies the same schema itself on first use, so this step is for
+inspectability rather than correctness.
+
 SQLite is the planner operational memory. It is not a replacement for ClickUp task
 status and it is not a replacement for Google Calendar commitments.
 
@@ -287,7 +303,6 @@ mcp_servers:
       PLANNING_CALENDAR_ID_FILE: "/home/YOUR_USER/.config/planning-agent/planning_calendar_id"
       PLANNING_CALENDAR_NAME: "Planning Agent"
       PLANNER_TIMEZONE: "Europe/Moscow"
-      READ_CALENDAR_IDS: "primary"
     timeout: 30
     connect_timeout: 10
     enabled: true
@@ -367,39 +382,39 @@ This test is mandatory before autonomous cron.
 
 ## 11. Configure all readable Google calendars
 
-The default is:
+Fixed commitments are read through the `google-workspace` skill, not through
+planning_core. The calendar list therefore lives in the skill config, not in the MCP
+environment:
 
 ```text
-READ_CALENDAR_IDS=primary
+skills.config.planning.calendar_read_ids
 ```
 
-If work, university or personal commitments live in separate calendars, ask Hermes to
-call:
+Default:
 
 ```text
-calendar_list_calendars
+primary
 ```
 
-Record the real calendar IDs.
-
-Then update both:
+If work, university or personal commitments live in separate calendars, list their real
+IDs through the `google-workspace` skill's calendar-list operation, then set:
 
 ```text
-~/.config/planning-agent/env
-~/.hermes/config.yaml
+planning.calendar_read_ids = primary,WORK_ID,UNIVERSITY_ID
 ```
 
-Example:
+Do NOT add the app-owned `Planning Agent` calendar here. Its blocks are read through
+`calendar_list_planning_blocks`; including it in the read set would make the planner count
+its own blocks as fixed commitments.
+
+Verify in a Hermes session:
 
 ```text
-READ_CALENDAR_IDS=primary,WORK_ID,UNIVERSITY_ID
+Через google-workspace покажи мои события на завтра, затем через planning_core
+покажи мои planning blocks на завтра.
 ```
 
-Restart Hermes after changing MCP environment.
-
-Do not add the app-owned `Planning Agent` calendar here merely to make writes work;
-its write target is resolved separately. Add it to reads only if your reconciliation
-logic explicitly needs it in the same read set.
+Expected: two separate lists, and no planner block appearing in the first one.
 
 ## 12. Put fixed sport commitments in the user Calendar
 
@@ -429,6 +444,19 @@ cp hermes-skill/planning-agent/SKILL.md \
   ~/.hermes/skills/productivity/planning-agent/SKILL.md
 ```
 
+The skill declares `requires_toolsets: [mcp-planning_core]`, so it stays unavailable
+until §8 succeeded, and `related_skills: [google-workspace]` for calendar reads.
+
+Set the injected config before the first real run:
+
+```text
+planning.timezone                 Europe/Moscow
+planning.calendar_read_ids        primary[,WORK_ID,...]
+planning.planning_calendar_name   Planning Agent   (must match PLANNING_CALENDAR_NAME)
+planning.clickup_server_name      clickup
+planning.clickup_daily_call_budget 40
+```
+
 Start a new Hermes session or restart the gateway if needed for skill discovery.
 
 Behavioral test:
@@ -438,9 +466,9 @@ Behavioral test:
 ```
 
 Expected:
-- planner Calendar may be changed autonomously;
+- planner Calendar may be changed autonomously, only through planning_core;
 - ClickUp mutation requires confirmation;
-- user Calendar events are not changed;
+- user Calendar events are not changed, and google-workspace is never used to write;
 - soft project dates may live locally;
 - master's deadlines are hard.
 
@@ -834,11 +862,13 @@ The system is ready for unattended daily rituals only if every item below is tru
 - [ ] Hermes timezone is `Europe/Moscow`.
 - [ ] `PLANNER_TIMEZONE=Europe/Moscow`.
 - [ ] planning_core MCP appears in Hermes.
-- [ ] `planner_health()` returns `ok=true`.
+- [ ] `calendar_ensure_planning_calendar` was called once and `planner_health()` returns
+      `ok=true`.
 - [ ] `Planning Agent` secondary calendar exists.
 - [ ] planner can create/delete its own test event.
 - [ ] planner cannot mutate a user Calendar event.
-- [ ] every relevant user calendar is readable.
+- [ ] `google-workspace` reads every relevant user calendar.
+- [ ] `planning.calendar_read_ids` is set and excludes the planning calendar.
 - [ ] fixed trainer/football commitments live as user-owned Calendar events.
 - [ ] Planning Agent Skill is discovered.
 - [ ] ClickUp task read contract works.

@@ -7,7 +7,9 @@ work, sport, master's studies, personal projects/learning, social relationships,
 
 ## Calibrated user profile
 
-- Canonical planning timezone: Europe/Moscow. All planner-generated times, rituals and policy anchors use Europe/Moscow unless an external Calendar event explicitly carries another timezone.
+- Canonical planning timezone is `planning.timezone` (Europe/Moscow). All planner-generated
+  times, rituals and policy anchors use it unless an external Calendar event explicitly
+  carries another timezone.
 - Work is flexible. The usual meeting-fragmentation window starts around 13:00
   Europe/Moscow and may run until 19:00-20:00 Europe/Moscow. This is NOT a fixed busy
   interval; actual Google Calendar events are authoritative.
@@ -28,23 +30,72 @@ work, sport, master's studies, personal projects/learning, social relationships,
 1. ClickUp is authoritative for task identity, status, user-authored due dates and task
    semantics.
 2. Google Calendar is authoritative for fixed/external time commitments.
-3. The dedicated `Planning Agent` calendar contains only your movable planning blocks.
+3. The dedicated `planning.planning_calendar_name` calendar contains only your movable
+   planning blocks. Calendar identity is the ownership signal: an event on that calendar
+   is yours, an event anywhere else is not.
 4. Planner SQLite is authoritative for learned estimates, plan revisions, audit history
    and your operational model of the user.
 5. Never treat a calendar block ending as proof that a ClickUp task is complete.
 
+## Calendar tool routing
+
+Calendar access is deliberately split between two skills. Reads and writes do not go
+through the same credential.
+
+Read fixed and external commitments through the `google-workspace` skill:
+- load it and use its Calendar read operations over `planning.calendar_read_ids`;
+- that list must NOT include `planning.planning_calendar_name`, or your own blocks will
+  be double-counted as fixed commitments;
+- this is your only view of meetings, trainer sessions, football and anything a person
+  other than you created.
+
+Read, write and delete your own blocks only through the `planning_core` MCP:
+- `calendar_list_planning_blocks` returns your blocks with their `planner_key`;
+- `calendar_upsert_planning_block` creates/updates one, keyed idempotently by
+  `planner_key`, so a retry after a timeout never duplicates a block;
+- `calendar_delete_planning_block` removes one;
+- `calendar_ensure_planning_calendar` creates the dedicated calendar once.
+
+`planning_core` holds only the Google `calendar.app.created` scope. It structurally cannot
+see or touch a calendar it did not create, which is what makes the write guard real rather
+than a promise. Do not weaken that by routing a planning-block write through
+`google-workspace`, and never use `google-workspace` Calendar write operations at all —
+its credential can reach the user's real calendars, so a mistake there is not recoverable
+by policy.
+
+## Configuration
+
+Hermes injects configured values from `skills.config.*` when this skill loads.
+
+Before first real use, require:
+- `planning.calendar_read_ids`
+- `planning.planning_calendar_name`, matching `PLANNING_CALENDAR_NAME` in the
+  `planning_core` MCP environment
+
+If required values are blank in an interactive run, ask once. In an unattended run, report
+`CONFIG_REQUIRED` and make no mutations.
+
+## ClickUp MCP adapter rule
+
+Do not hard-code vendor-specific ClickUp tool names beyond the configured
+`planning.clickup_server_name` prefix. Resolve the needed operations by capability from
+the registered tools for that server: batched task read/search, single task read, and the
+confirmation-gated mutations for status, priority, due date, tags and task creation.
 
 ## ClickUp MCP call budget
 
-On Free Forever, treat ClickUp MCP as rate-limited. Prefer batched reads and local task
-snapshots. Do not poll ClickUp on a short timer. The midday scan should reuse a recent
-snapshot unless fresh task state could materially change a decision. Preserve a large
-part of the daily call budget for user-driven interactions.
+On Free Forever, treat ClickUp MCP as rate-limited. Stay within
+`planning.clickup_daily_call_budget` autonomous calls per day and leave the rest of the
+100-call rolling-24h allowance for user-driven work. Prefer batched reads and local task
+snapshots via `planner_cache_clickup_tasks`. Do not poll ClickUp on a short timer. The
+midday scan should reuse a recent snapshot unless fresh task state could materially change
+a decision.
 
 ## Planning loop
 
 For every plan/replan:
-1. Read fresh Calendar state for the relevant horizon.
+1. Read fresh Calendar state for the relevant horizon: external commitments through
+   `google-workspace`, your existing blocks through `calendar_list_planning_blocks`.
 2. Use a recent cached ClickUp snapshot when it is decision-safe; refresh ClickUp with batched reads when task freshness can materially change the plan.
 3. Normalize task metadata. Reuse planner memory; infer missing fields conservatively.
 4. Determine mode: normal, low_energy, academic_crunch, or explicit user override.
@@ -54,7 +105,8 @@ For every plan/replan:
 8. Score flexible candidates using the configured priority model.
 9. Place high-cognitive tasks into the user's strongest learned windows when possible.
 10. Limit deep work and context switching; never solve overload by deleting sleep/rest.
-11. Commit only agent-owned Calendar blocks.
+11. Commit blocks only through `calendar_upsert_planning_block`, reusing the same
+    `planner_key` for the same logical block across revisions.
 12. Write audit records and any learning observations.
 13. Send the user only the decisions that affect them.
 
@@ -71,7 +123,10 @@ insufficient, enter a risk state and surface the conflict.
 When the day breaks:
 - lock elapsed blocks, currently-running block unless the user says to stop, and all
   external Calendar events;
-- preserve any planning blocks manually moved by the user unless impossible;
+- call `calendar_list_planning_blocks` before writing and compare each block's actual
+  start/end against what you last committed for that `planner_key`. A difference means the
+  user moved it by hand: treat that as an override, keep the user's time, and record the
+  correction as evidence. An upsert with a stale time would silently overwrite the move;
 - recompute only the future;
 - minimize churn: do not move a future block unless the objective improves materially
   or a constraint changed;
@@ -98,7 +153,7 @@ If a master's hard deadline is within 72h and estimated completion risk is high:
 ## Autonomy
 
 Autonomous:
-- create/move/delete events on the dedicated Planning Agent calendar;
+- create/move/delete blocks on the dedicated planning calendar via `planning_core`;
 - reorder the day;
 - create buffers;
 - update planner SQLite annotations/state;
@@ -111,7 +166,8 @@ Notify:
 
 Ask:
 - before ANY ClickUp mutation, including priority, status, tags, due dates or task creation;
-- before cancelling or moving a user-created Calendar event;
+- before proposing a change to a user-created Calendar event, which the user then makes
+  themselves;
 - before creating an invitation or commitment involving another person;
 - before trading protected sleep below the configured floor.
 
@@ -119,10 +175,23 @@ A ClickUp confirmation is valid only for the exact proposed diff in the current 
 Do not interpret one approval as continuing permission.
 
 Never:
-- delete/edit non-planning Calendar events autonomously;
+- write, move or delete any Calendar event through `google-workspace`, on any calendar,
+  including the planning calendar;
+- delete/edit non-planning Calendar events by any route;
 - mark a task complete solely because its time block ended;
 - invent task estimates, deadlines, API fields, attendees or commitments and present
   them as facts.
+
+## Unattended runs
+
+A ritual run delivers a Telegram message and cannot block on a prompt. It may end with at
+most one question when the answer materially changes the next day, but it must never wait
+for one before deciding. On a hard blocker, make no uncertain mutations and report the
+sentinel instead of guessing:
+- `AUTH_REQUIRED` — Google or ClickUp authorization is missing or expired;
+- `CONFIG_REQUIRED` — a required `skills.config.planning.*` value is blank.
+
+When nothing actionable changed, respond exactly `[SILENT]`.
 
 ## Telegram style
 

@@ -1,16 +1,14 @@
 {
   "planning_core": {
-    "calendar_list_calendars": {
+    "calendar_list_planning_blocks": {
       "side_effect": false,
-      "purpose": "discover calendar IDs"
-    },
-    "calendar_list_events": {
-      "side_effect": false,
+      "scope": "dedicated planning calendar only",
       "inputs": [
         "time_min",
-        "time_max",
-        "calendar_ids?"
-      ]
+        "time_max"
+      ],
+      "purpose": "detect manual moves of planner blocks before an upsert overwrites them",
+      "note": "user and external calendars are read through the google-workspace skill"
     },
     "calendar_ensure_planning_calendar": {
       "side_effect": true,
