@@ -7,7 +7,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Deliverables for **Hermes Agent** (Nous Research), a self-hosted LLM agent with Telegram
 delivery, cron rituals and MCP servers. It is not an application: it is three independent
 bundles that get *copied out* to a Hermes host. Nothing here runs from the repo root, and
-there is no git repo, no lockfile, no CI.
+there is no lockfile and no CI. It is a git repo (`origin` on GitHub), but nothing is
+built or tested from it.
 
 | Path | What it is | Deploy target |
 |---|---|---|
@@ -33,7 +34,7 @@ python university-ops/scripts/normalize_assignment.py --input assignments.jsonl 
 cd /opt/planning-agent && uv sync
 uv run python scripts/oauth_bootstrap.py          # one-time Google OAuth, needs SSH tunnel on :8765
 uv run python scripts/health_check.py             # exit 1 if db/token/calendar-id missing
-sqlite3 ~/.local/share/planning-agent/planner.db < schema.sql
+sqlite3 ~/.local/share/planning-agent/planner.db < schema.sql   # optional; server applies it itself
 ```
 
 There are **no automated tests**. "Tests" are manual checklists an operator runs against a
@@ -61,8 +62,12 @@ Break one of these and the bundle is unsafe, not just wrong.
   events carrying `extendedProperties.private.planner_owned == "1"`. Both
   `calendar_upsert_planning_block` and `calendar_delete_planning_block` in
   [planner_mcp/server.py](planning-agent/planner_mcp/server.py) raise rather than touch a
-  foreign event. The OAuth scopes make this structural: read-only on events, plus
-  `calendar.app.created` for writes.
+  foreign event. The OAuth scope makes this structural: `calendar.app.created` is the
+  only scope planning-core holds, so the credential cannot see or touch a calendar it did
+  not create. Calendar reads are therefore split by credential: fixed/external commitments
+  come from the `google-workspace` skill (`skills.config.planning.calendar_read_ids`), the
+  planner's own blocks from `calendar_list_planning_blocks`. Never route a planning-block
+  write through `google-workspace` — its credential reaches the user's real calendars.
 - ClickUp descriptions: only the `HERMES_UNIVERSITY_MANAGED_START/END` block is replaced;
   everything outside it is preserved byte-for-byte. Two blocks → refuse, report
   `DUPLICATE_MANAGED_BLOCK`.
